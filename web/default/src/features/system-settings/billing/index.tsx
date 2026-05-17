@@ -65,6 +65,7 @@ const defaultBillingSettings: BillingSettings = {
   ZPayAddress: '',
   ZPayId: '',
   ZPayKey: '',
+  ZPayChannelID: '',
   ZPayPrice: 7.3,
   ZPayMinTopUp: 1,
   ZPayMethods: '',

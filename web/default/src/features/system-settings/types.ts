@@ -225,6 +225,7 @@ export type BillingSettings = {
   ZPayAddress: string
   ZPayId: string
   ZPayKey: string
+  ZPayChannelID: string
   ZPayPrice: number
   ZPayMinTopUp: number
   ZPayMethods: string

@@ -147,6 +147,7 @@ const BILLING_SECTIONS = [
           ZPayAddress: settings.ZPayAddress,
           ZPayId: settings.ZPayId,
           ZPayKey: settings.ZPayKey,
+          ZPayChannelID: settings.ZPayChannelID,
           ZPayPrice: settings.ZPayPrice,
           ZPayMinTopUp: settings.ZPayMinTopUp,
           ZPayMethods: settings.ZPayMethods,

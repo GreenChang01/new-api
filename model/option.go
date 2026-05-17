@@ -83,6 +83,7 @@ func InitOptionMap() {
 	common.OptionMap["ZPayAddress"] = ""
 	common.OptionMap["ZPayId"] = ""
 	common.OptionMap["ZPayKey"] = ""
+	common.OptionMap["ZPayChannelID"] = ""
 	common.OptionMap["ZPayPrice"] = strconv.FormatFloat(operation_setting.ZPayPrice, 'f', -1, 64)
 	common.OptionMap["ZPayMinTopUp"] = strconv.Itoa(operation_setting.ZPayMinTopUp)
 	common.OptionMap["ZPayMethods"] = operation_setting.ZPayMethods2JsonString()
@@ -375,6 +376,8 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.EpayKey = value
 	case "ZPayKey":
 		operation_setting.ZPayKey = value
+	case "ZPayChannelID":
+		operation_setting.ZPayChannelID = value
 	case "Price":
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "ZPayPrice":

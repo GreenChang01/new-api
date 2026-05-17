@@ -85,6 +85,7 @@ const paymentSchema = z.object({
   }, 'Provide a valid callback URL starting with http:// or https://'),
   ZPayId: z.string(),
   ZPayKey: z.string(),
+  ZPayChannelID: z.string(),
   ZPayPrice: z.coerce.number().min(0),
   ZPayMinTopUp: z.coerce.number().min(0),
   ZPayMethods: z.string().superRefine((value, ctx) => {
@@ -433,12 +434,14 @@ export function PaymentSettingsSection({
       ZPayAddress: removeTrailingSlash(values.ZPayAddress),
       ZPayId: values.ZPayId.trim(),
       ZPayKey: values.ZPayKey.trim(),
+      ZPayChannelID: values.ZPayChannelID.trim(),
     }
 
     const initial = {
       ZPayAddress: removeTrailingSlash(initialRef.current.ZPayAddress),
       ZPayId: initialRef.current.ZPayId.trim(),
       ZPayKey: initialRef.current.ZPayKey.trim(),
+      ZPayChannelID: initialRef.current.ZPayChannelID.trim(),
     }
 
     const updates: Array<{ key: string; value: string }> = []
@@ -453,6 +456,10 @@ export function PaymentSettingsSection({
 
     if (sanitized.ZPayKey && sanitized.ZPayKey !== initial.ZPayKey) {
       updates.push({ key: 'ZPayKey', value: sanitized.ZPayKey })
+    }
+
+    if (sanitized.ZPayChannelID !== initial.ZPayChannelID) {
+      updates.push({ key: 'ZPayChannelID', value: sanitized.ZPayChannelID })
     }
 
     if (updates.length === 0) {
@@ -1297,6 +1304,28 @@ export function PaymentSettingsSection({
                 )}
               />
             </div>
+
+            <FormField
+              control={form.control}
+              name='ZPayChannelID'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Z Pay channel ID (optional)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder='1234'
+                      autoComplete='off'
+                      {...field}
+                      onChange={(event) => field.onChange(event.target.value)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Optional cid parameter. Leave blank to let Z Pay choose a channel randomly.')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}

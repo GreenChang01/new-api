@@ -18,6 +18,7 @@ var MinTopUp = 1
 var ZPayAddress = ""
 var ZPayId = ""
 var ZPayKey = ""
+var ZPayChannelID = ""
 var ZPayPrice = 7.3
 var ZPayMinTopUp = 1
 var USDExchangeRate = 7.3

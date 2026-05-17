@@ -78,12 +78,6 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("%s%dNO%s", config.SubscriptionTag, userId, tradeNo)
 
-	client := getGatewayClient(config)
-	if client == nil {
-		common.ApiErrorMsg(c, "当前管理员未配置支付信息")
-		return
-	}
-
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
@@ -98,15 +92,41 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiErrorMsg(c, "创建订单失败")
 		return
 	}
-	uri, params, err := client.Purchase(&epay.PurchaseArgs{
-		Type:           normalizeGatewayMethod(req.PaymentMethod),
-		ServiceTradeNo: tradeNo,
-		Name:           fmt.Sprintf("SUB:%s", plan.Title),
-		Money:          strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
-		Device:         epay.PC,
-		NotifyUrl:      notifyUrl,
-		ReturnUrl:      returnUrl,
-	})
+	var uri string
+	var params map[string]string
+	if config.IsZPay {
+		client := getZPayClient(config)
+		if client == nil {
+			common.ApiErrorMsg(c, "当前管理员未配置 Z Pay 支付信息")
+			return
+		}
+		uri, params, err = client.Purchase(&service.ZPayPurchaseArgs{
+			Type:           normalizeGatewayMethod(req.PaymentMethod),
+			ServiceTradeNo: tradeNo,
+			Name:           fmt.Sprintf("SUB:%s", plan.Title),
+			Money:          strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
+			NotifyURL:      notifyUrl.String(),
+			ReturnURL:      returnUrl.String(),
+			ClientIP:       c.ClientIP(),
+			Device:         service.ZPayDeviceFromUserAgent(c.Request.UserAgent()),
+			ChannelID:      config.ChannelID,
+		})
+	} else {
+		client := getGatewayClient(config)
+		if client == nil {
+			common.ApiErrorMsg(c, "当前管理员未配置支付信息")
+			return
+		}
+		uri, params, err = client.Purchase(&epay.PurchaseArgs{
+			Type:           normalizeGatewayMethod(req.PaymentMethod),
+			ServiceTradeNo: tradeNo,
+			Name:           fmt.Sprintf("SUB:%s", plan.Title),
+			Money:          strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
+			Device:         epay.PC,
+			NotifyUrl:      notifyUrl,
+			ReturnUrl:      returnUrl,
+		})
+	}
 	if err != nil {
 		_ = model.ExpireSubscriptionOrder(tradeNo, config.Provider)
 		common.ApiErrorMsg(c, "拉起支付失败")
@@ -148,26 +168,58 @@ func SubscriptionEpayNotify(c *gin.Context) {
 		return
 	}
 	config := getGatewayConfig(order.PaymentMethod)
-	client := getGatewayClient(config)
-	if client == nil {
-		_, _ = c.Writer.Write([]byte("fail"))
-		return
+	var verifyTradeNo string
+	var verifyType string
+	var verifyStatus string
+	var verifyOK bool
+	var verifyErr error
+	if config.IsZPay {
+		client := getZPayClient(config)
+		if client == nil {
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
+		verifyInfo, err := client.Verify(params)
+		verifyErr = err
+		if verifyErr == nil {
+			verifyTradeNo = verifyInfo.ServiceTradeNo
+			verifyType = "zpay_" + verifyInfo.Type
+			verifyStatus = verifyInfo.TradeStatus
+			verifyOK = verifyInfo.VerifyStatus
+		}
+	} else {
+		client := getGatewayClient(config)
+		if client == nil {
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
+		verifyInfo, err := client.Verify(params)
+		verifyErr = err
+		if verifyErr == nil {
+			verifyTradeNo = verifyInfo.ServiceTradeNo
+			verifyType = verifyInfo.Type
+			verifyStatus = verifyInfo.TradeStatus
+			verifyOK = verifyInfo.VerifyStatus
+		}
 	}
-	verifyInfo, err := client.Verify(params)
-	if err != nil || !verifyInfo.VerifyStatus {
+	if verifyErr != nil || !verifyOK {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
 
-	if verifyInfo.TradeStatus != epay.StatusTradeSuccess {
+	if verifyStatus != epay.StatusTradeSuccess && verifyStatus != "TRADE_SUCCESS" {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
 
-	LockOrder(verifyInfo.ServiceTradeNo)
-	defer UnlockOrder(verifyInfo.ServiceTradeNo)
+	LockOrder(verifyTradeNo)
+	defer UnlockOrder(verifyTradeNo)
 
-	if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), config.Provider, verifyInfo.Type); err != nil {
+	if config.IsZPay && params["money"] != strconv.FormatFloat(order.Money, 'f', 2, 64) {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	if err := model.CompleteSubscriptionOrder(verifyTradeNo, common.GetJsonString(params), config.Provider, verifyType); err != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -210,20 +262,52 @@ func SubscriptionEpayReturn(c *gin.Context) {
 		return
 	}
 	config := getGatewayConfig(order.PaymentMethod)
-	client := getGatewayClient(config)
-	if client == nil {
+	var verifyTradeNo string
+	var verifyType string
+	var verifyStatus string
+	var verifyOK bool
+	var verifyErr error
+	if config.IsZPay {
+		client := getZPayClient(config)
+		if client == nil {
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
+			return
+		}
+		verifyInfo, err := client.Verify(params)
+		verifyErr = err
+		if verifyErr == nil {
+			verifyTradeNo = verifyInfo.ServiceTradeNo
+			verifyType = "zpay_" + verifyInfo.Type
+			verifyStatus = verifyInfo.TradeStatus
+			verifyOK = verifyInfo.VerifyStatus
+		}
+	} else {
+		client := getGatewayClient(config)
+		if client == nil {
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
+			return
+		}
+		verifyInfo, err := client.Verify(params)
+		verifyErr = err
+		if verifyErr == nil {
+			verifyTradeNo = verifyInfo.ServiceTradeNo
+			verifyType = verifyInfo.Type
+			verifyStatus = verifyInfo.TradeStatus
+			verifyOK = verifyInfo.VerifyStatus
+		}
+	}
+	if verifyErr != nil || !verifyOK {
 		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 		return
 	}
-	verifyInfo, err := client.Verify(params)
-	if err != nil || !verifyInfo.VerifyStatus {
-		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
-		return
-	}
-	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
-		LockOrder(verifyInfo.ServiceTradeNo)
-		defer UnlockOrder(verifyInfo.ServiceTradeNo)
-		if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), config.Provider, verifyInfo.Type); err != nil {
+	if verifyStatus == epay.StatusTradeSuccess || verifyStatus == "TRADE_SUCCESS" {
+		LockOrder(verifyTradeNo)
+		defer UnlockOrder(verifyTradeNo)
+		if config.IsZPay && params["money"] != strconv.FormatFloat(order.Money, 'f', 2, 64) {
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
+			return
+		}
+		if err := model.CompleteSubscriptionOrder(verifyTradeNo, common.GetJsonString(params), config.Provider, verifyType); err != nil {
 			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 			return
 		}
