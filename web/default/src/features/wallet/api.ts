@@ -32,6 +32,10 @@ import type {
   AffiliateTransferResponse,
   BillingHistoryResponse,
   CompleteOrderRequest,
+  ZPayOrderQueryRequest,
+  ZPayOrderQueryResponse,
+  ZPayRefundRequest,
+  ZPayRefundResponse,
   CreemPaymentRequest,
   CreemPaymentResponse,
   WaffoPaymentRequest,
@@ -231,5 +235,25 @@ export async function completeOrder(
   request: CompleteOrderRequest
 ): Promise<ApiResponse> {
   const res = await api.post('/api/user/topup/complete', request)
+  return res.data
+}
+
+/**
+ * Query a Z Pay order from provider (admin only)
+ */
+export async function queryZPayOrder(
+  request: ZPayOrderQueryRequest
+): Promise<ZPayOrderQueryResponse> {
+  const res = await api.post('/api/user/topup/zpay/query', request)
+  return res.data
+}
+
+/**
+ * Refund a Z Pay order and roll back local quota (admin only)
+ */
+export async function refundZPayOrder(
+  request: ZPayRefundRequest
+): Promise<ZPayRefundResponse> {
+  const res = await api.post('/api/user/topup/zpay/refund', request)
   return res.data
 }

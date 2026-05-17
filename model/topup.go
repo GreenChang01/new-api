@@ -46,6 +46,8 @@ var (
 	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
 )
 
+type TopUpRefundCallback func(topUp *TopUp) error
+
 func (topUp *TopUp) Insert() error {
 	var err error
 	err = DB.Create(topUp).Error
@@ -103,6 +105,106 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 		topUp.Status = targetStatus
 		return tx.Save(topUp).Error
 	})
+}
+
+func calculateTopUpQuota(topUp *TopUp) (int, error) {
+	if topUp == nil {
+		return 0, errors.New("充值订单不存在")
+	}
+	if topUp.PaymentProvider == PaymentProviderStripe {
+		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		quota := int(decimal.NewFromFloat(topUp.Money).Mul(dQuotaPerUnit).IntPart())
+		if quota <= 0 {
+			return 0, errors.New("无效的充值额度")
+		}
+		return quota, nil
+	}
+	dAmount := decimal.NewFromInt(topUp.Amount)
+	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	quota := int(dAmount.Mul(dQuotaPerUnit).IntPart())
+	if quota <= 0 {
+		return 0, errors.New("无效的充值额度")
+	}
+	return quota, nil
+}
+
+// RefundZPayTopUp refunds a successful Z Pay top-up locally after the upstream
+// refund callback succeeds. The callback is invoked only after local status,
+// provider, and balance checks pass.
+func RefundZPayTopUp(tradeNo string, callerIp string, refundRemote TopUpRefundCallback) error {
+	if tradeNo == "" {
+		return errors.New("未提供订单号")
+	}
+	if refundRemote == nil {
+		return errors.New("退款处理器未配置")
+	}
+
+	refCol := "`trade_no`"
+	if common.UsingPostgreSQL {
+		refCol = `"trade_no"`
+	}
+
+	var userId int
+	var quotaToRefund int
+	var payMoney float64
+	var paymentMethod string
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		topUp := &TopUp{}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+			return errors.New("充值订单不存在")
+		}
+		if topUp.PaymentProvider != PaymentProviderZPay {
+			return errors.New("该订单不是 Z Pay 订单")
+		}
+		if topUp.Status == common.TopUpStatusRefunded {
+			return errors.New("订单已退款")
+		}
+		if topUp.Status != common.TopUpStatusSuccess {
+			return errors.New("只有已成功的 Z Pay 充值订单可以退款")
+		}
+
+		var err error
+		quotaToRefund, err = calculateTopUpQuota(topUp)
+		if err != nil {
+			return err
+		}
+
+		user := &User{}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ?", topUp.UserId).First(user).Error; err != nil {
+			return errors.New("用户不存在")
+		}
+		if user.Quota < quotaToRefund {
+			return errors.New("用户当前余额不足，无法退款")
+		}
+
+		if err := refundRemote(topUp); err != nil {
+			return err
+		}
+
+		user.Quota -= quotaToRefund
+		if err := tx.Save(user).Error; err != nil {
+			return err
+		}
+
+		topUp.Status = common.TopUpStatusRefunded
+		if err := tx.Save(topUp).Error; err != nil {
+			return err
+		}
+
+		userId = topUp.UserId
+		payMoney = topUp.Money
+		paymentMethod = topUp.PaymentMethod
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	_ = InvalidateUserCache(userId)
+	RecordTopupLog(userId, fmt.Sprintf("Z Pay 退款成功，扣回额度: %v，退款金额：%.2f", logger.FormatQuota(quotaToRefund), payMoney), callerIp, paymentMethod, PaymentProviderZPay)
+	return nil
 }
 
 func Recharge(referenceId string, customerId string, callerIp string) (err error) {
@@ -350,16 +452,10 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		// 计算应充值额度：
 		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
 		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
-		if topUp.PaymentProvider == PaymentProviderStripe {
-			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-			quotaToAdd = int(decimal.NewFromFloat(topUp.Money).Mul(dQuotaPerUnit).IntPart())
-		} else {
-			dAmount := decimal.NewFromInt(topUp.Amount)
-			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-			quotaToAdd = int(dAmount.Mul(dQuotaPerUnit).IntPart())
-		}
-		if quotaToAdd <= 0 {
-			return errors.New("无效的充值额度")
+		var err error
+		quotaToAdd, err = calculateTopUpQuota(topUp)
+		if err != nil {
+			return err
 		}
 
 		// 标记完成

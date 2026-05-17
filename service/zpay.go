@@ -46,24 +46,28 @@ type ZPayVerifyInfo struct {
 }
 
 type ZPayOrderInfo struct {
-	Code          int    `json:"code"`
-	Msg           string `json:"msg"`
-	TradeNo       string `json:"trade_no"`
+	Code           int    `json:"code"`
+	Msg            string `json:"msg"`
+	TradeNo        string `json:"trade_no"`
 	ServiceTradeNo string `json:"out_trade_no"`
-	Type          string `json:"type"`
-	MerchantID    string `json:"pid"`
-	AddTime       string `json:"addtime"`
-	EndTime       string `json:"endtime"`
-	Name          string `json:"name"`
-	Money         string `json:"money"`
-	Status        int    `json:"status"`
-	Param         string `json:"param"`
-	Buyer         string `json:"buyer"`
+	Type           string `json:"type"`
+	MerchantID     string `json:"pid"`
+	AddTime        string `json:"addtime"`
+	EndTime        string `json:"endtime"`
+	Name           string `json:"name"`
+	Money          string `json:"money"`
+	Status         int    `json:"status"`
+	Param          string `json:"param"`
+	Buyer          string `json:"buyer"`
 }
 
 type ZPayRefundResult struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
+}
+
+func (r *ZPayRefundResult) Success() bool {
+	return r != nil && r.Code == 1
 }
 
 func NewZPayClient(endpoint string, merchantID string, key string) *ZPayClient {

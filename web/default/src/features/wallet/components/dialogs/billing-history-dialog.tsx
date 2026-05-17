@@ -54,6 +54,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/status-badge'
 import { useBillingHistory } from '../../hooks/use-billing-history'
+import type { TopupRecord, ZPayOrderInfo } from '../../types'
 import {
   getStatusConfig,
   getPaymentMethodName,
@@ -78,14 +79,23 @@ export function BillingHistoryDialog({
     keyword,
     loading,
     completing,
+    querying,
+    refunding,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
+    handleQueryZPayOrder,
+    handleRefundZPayOrder,
   } = useBillingHistory()
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
+  const [queryOrderInfo, setQueryOrderInfo] = useState<ZPayOrderInfo | null>(
+    null
+  )
+  const [queryDialogOpen, setQueryDialogOpen] = useState(false)
+  const [refundRecord, setRefundRecord] = useState<TopupRecord | null>(null)
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
 
   const totalPages = Math.ceil(total / pageSize)
@@ -98,6 +108,93 @@ export function BillingHistoryDialog({
       }
     }
   }
+
+  const handleQueryOrder = async (tradeNo: string) => {
+    const info = await handleQueryZPayOrder(tradeNo)
+    if (info) {
+      setQueryOrderInfo(info)
+      setQueryDialogOpen(true)
+    }
+  }
+
+  const handleConfirmRefund = async () => {
+    if (refundRecord) {
+      const result = await handleRefundZPayOrder(refundRecord.trade_no)
+      if (result !== null) {
+        setRefundRecord(null)
+      }
+    }
+  }
+
+  const renderZPayActions = (record: TopupRecord) => {
+    if (!isAdmin) {
+      return null
+    }
+
+    const isZPayOrder =
+      record.payment_provider === 'zpay' || record.payment_method.startsWith('zpay_')
+    const disabled = completing || querying || refunding
+    return (
+      <div className='mt-4 flex flex-wrap justify-end gap-2'>
+        {record.status === 'pending' && (
+          <Button
+            size='sm'
+            variant='outline'
+            onClick={() => setConfirmTradeNo(record.trade_no)}
+            disabled={disabled}
+          >
+            {t('Complete Order')}
+          </Button>
+        )}
+        {isZPayOrder && (
+          <>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => handleQueryOrder(record.trade_no)}
+              disabled={disabled}
+            >
+              {t('Query Order')}
+            </Button>
+            {record.status === 'success' && (
+              <Button
+                size='sm'
+                variant='destructive'
+                onClick={() => setRefundRecord(record)}
+                disabled={disabled}
+              >
+                {t('Refund')}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+    )
+  }
+
+  const zPayOrderFields = queryOrderInfo
+    ? [
+        { label: t('Platform Order No.'), value: queryOrderInfo.trade_no },
+        { label: t('Merchant Order No.'), value: queryOrderInfo.out_trade_no },
+        { label: t('Amount'), value: queryOrderInfo.money },
+        {
+          label: t('Payment Method'),
+          value: queryOrderInfo.type
+            ? getPaymentMethodName(`zpay_${queryOrderInfo.type}`, t)
+            : undefined,
+        },
+        {
+          label: t('Payment Status'),
+          value:
+            queryOrderInfo.status === undefined
+              ? undefined
+              : String(queryOrderInfo.status),
+        },
+        { label: t('Created At'), value: queryOrderInfo.addtime },
+        { label: t('Completed At'), value: queryOrderInfo.endtime },
+        { label: t('Buyer Account'), value: queryOrderInfo.buyer },
+      ]
+    : []
 
   return (
     <>
@@ -262,18 +359,7 @@ export function BillingHistoryDialog({
                         </div>
 
                         {/* Admin Actions */}
-                        {isAdmin && record.status === 'pending' && (
-                          <div className='mt-4 flex justify-end'>
-                            <Button
-                              size='sm'
-                              variant='outline'
-                              onClick={() => setConfirmTradeNo(record.trade_no)}
-                              disabled={completing}
-                            >
-                              {t('Complete Order')}
-                            </Button>
-                          </div>
-                        )}
+                        {renderZPayActions(record)}
                       </div>
                     )
                   })}
@@ -342,6 +428,78 @@ export function BillingHistoryDialog({
               disabled={completing}
             >
               {completing ? t('Processing...') : t('Confirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Z Pay Query Result Dialog */}
+      <Dialog open={queryDialogOpen} onOpenChange={setQueryDialogOpen}>
+        <DialogContent className='sm:max-w-lg'>
+          <DialogHeader>
+            <DialogTitle>{t('Z Pay Order Details')}</DialogTitle>
+            <DialogDescription>
+              {queryOrderInfo?.msg || t('Provider order query result')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className='grid gap-3 sm:grid-cols-2'>
+            {zPayOrderFields.map((field) => (
+              <div key={field.label} className='space-y-1'>
+                <Label className='text-muted-foreground text-xs'>
+                  {field.label}
+                </Label>
+                <div className='break-all text-sm font-medium'>
+                  {field.value || '-'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm Z Pay Refund Dialog */}
+      <AlertDialog
+        open={!!refundRecord}
+        onOpenChange={(open) => !open && setRefundRecord(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('Refund Z Pay Order')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'Refund this Z Pay order? The local credited quota from this top-up will be deducted after the provider refund succeeds.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {refundRecord && (
+            <div className='space-y-2 rounded-md border p-3 text-sm'>
+              <div className='flex justify-between gap-4'>
+                <span className='text-muted-foreground'>{t('Order No.')}</span>
+                <span className='break-all font-mono'>
+                  {refundRecord.trade_no}
+                </span>
+              </div>
+              <div className='flex justify-between gap-4'>
+                <span className='text-muted-foreground'>{t('User ID')}</span>
+                <span>{refundRecord.user_id}</span>
+              </div>
+              <div className='flex justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Refund Amount')}
+                </span>
+                <span>{formatNumber(refundRecord.money)}</span>
+              </div>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={refunding}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmRefund}
+              disabled={refunding}
+            >
+              {refunding ? t('Processing...') : t('Confirm Refund')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

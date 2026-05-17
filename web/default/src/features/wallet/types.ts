@@ -54,6 +54,8 @@ export type WaffoPancakePaymentResponse = ApiResponse<
     }
   | string
 >
+export type ZPayOrderQueryResponse = ApiResponse<ZPayOrderInfo>
+export type ZPayRefundResponse = ApiResponse<ZPayRefundResult>
 
 /**
  * Creem product configuration
@@ -244,7 +246,12 @@ export interface UserWalletData {
 /**
  * Topup record status
  */
-export type TopupStatus = 'success' | 'pending' | 'expired'
+export type TopupStatus =
+  | 'success'
+  | 'pending'
+  | 'expired'
+  | 'failed'
+  | 'refunded'
 
 /**
  * Topup billing record
@@ -262,6 +269,8 @@ export interface TopupRecord {
   trade_no: string
   /** Payment method type */
   payment_method: string
+  /** Payment provider type */
+  payment_provider?: string
   /** Creation timestamp */
   create_time: number
   /** Completion timestamp */
@@ -283,4 +292,58 @@ export interface BillingHistoryResponse {
  */
 export interface CompleteOrderRequest {
   trade_no: string
+}
+
+/**
+ * Z Pay order query request (admin only)
+ */
+export interface ZPayOrderQueryRequest {
+  trade_no: string
+}
+
+/**
+ * Z Pay order information returned by provider query API
+ */
+export interface ZPayOrderInfo {
+  /** Provider response code */
+  code: number
+  /** Provider response message */
+  msg?: string
+  /** Platform order number */
+  trade_no?: string
+  /** Merchant order number */
+  out_trade_no?: string
+  /** Payment method */
+  type?: string
+  /** Merchant ID */
+  pid?: string
+  /** Creation time */
+  addtime?: string
+  /** Completion time */
+  endtime?: string
+  /** Order name */
+  name?: string
+  /** Payment amount */
+  money?: string
+  /** Payment status */
+  status?: number
+  /** Provider passthrough parameter */
+  param?: string
+  /** Buyer account */
+  buyer?: string
+}
+
+/**
+ * Z Pay refund request (admin only)
+ */
+export interface ZPayRefundRequest {
+  trade_no: string
+}
+
+/**
+ * Z Pay refund result returned by provider refund API
+ */
+export interface ZPayRefundResult {
+  code: number
+  msg?: string
 }

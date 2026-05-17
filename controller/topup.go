@@ -114,8 +114,8 @@ func GetTopUpInfo(c *gin.Context) {
 			}
 			return nil
 		}(),
-		"creem_products":          setting.CreemProducts,
-		"pay_methods":             payMethods,
+		"creem_products": setting.CreemProducts,
+		"pay_methods":    payMethods,
 		"min_topup": func() int {
 			if isEpayTopUpEnabled() {
 				return operation_setting.MinTopUp
@@ -477,13 +477,13 @@ func EpayNotify(c *gin.Context) {
 			return
 		}
 		verifyInfo, verifyErr := client.Verify(params)
-			if verifyErr == nil {
-				verifyTradeNo = verifyInfo.ServiceTradeNo
-				verifyType = "zpay_" + verifyInfo.Type
-				verifyStatus = verifyInfo.TradeStatus
-				verifyOK = verifyInfo.VerifyStatus
-			}
-		} else {
+		if verifyErr == nil {
+			verifyTradeNo = verifyInfo.ServiceTradeNo
+			verifyType = "zpay_" + verifyInfo.Type
+			verifyStatus = verifyInfo.TradeStatus
+			verifyOK = verifyInfo.VerifyStatus
+		}
+	} else {
 		client := GetEpayClient()
 		if client == nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 client 未初始化 path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
@@ -494,13 +494,13 @@ func EpayNotify(c *gin.Context) {
 			return
 		}
 		verifyInfo, verifyErr := client.Verify(params)
-			if verifyErr == nil {
-				verifyTradeNo = verifyInfo.ServiceTradeNo
-				verifyType = verifyInfo.Type
-				verifyStatus = verifyInfo.TradeStatus
-				verifyOK = verifyInfo.VerifyStatus
-			}
+		if verifyErr == nil {
+			verifyTradeNo = verifyInfo.ServiceTradeNo
+			verifyType = verifyInfo.Type
+			verifyStatus = verifyInfo.TradeStatus
+			verifyOK = verifyInfo.VerifyStatus
 		}
+	}
 	if verifyErr == nil && verifyOK {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("支付网关 webhook 验签成功 trade_no=%s callback_type=%s trade_status=%s client_ip=%s", verifyTradeNo, verifyType, verifyStatus, c.ClientIP()))
 		_, err := c.Writer.Write([]byte("success"))
@@ -560,9 +560,9 @@ func EpayNotify(c *gin.Context) {
 			model.RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), c.ClientIP(), topUp.PaymentMethod, "epay")
 		}
 	} else {
-			logger.LogInfo(c.Request.Context(), fmt.Sprintf("支付网关 webhook 忽略事件 trade_no=%s callback_type=%s trade_status=%s client_ip=%s", verifyTradeNo, verifyType, verifyStatus, c.ClientIP()))
-		}
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("支付网关 webhook 忽略事件 trade_no=%s callback_type=%s trade_status=%s client_ip=%s", verifyTradeNo, verifyType, verifyStatus, c.ClientIP()))
 	}
+}
 
 func RequestAmount(c *gin.Context) {
 	var req AmountRequest
@@ -683,10 +683,13 @@ func AdminQueryZPayOrder(c *gin.Context) {
 		common.ApiErrorMsg(c, "订单不存在")
 		return
 	}
-	config := getGatewayConfig(topUp.PaymentMethod)
-	if !config.IsZPay {
+	if topUp.PaymentProvider != model.PaymentProviderZPay {
 		common.ApiErrorMsg(c, "该订单不是 Z Pay 订单")
 		return
+	}
+	config := getGatewayConfig(topUp.PaymentMethod)
+	if !config.IsZPay {
+		config = getGatewayConfig("zpay_alipay")
 	}
 	client := getZPayClient(config)
 	if client == nil {
@@ -707,22 +710,44 @@ func AdminRefundZPayOrder(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+
+	LockOrder(req.TradeNo)
+	defer UnlockOrder(req.TradeNo)
+
 	topUp := model.GetTopUpByTradeNo(req.TradeNo)
 	if topUp == nil {
 		common.ApiErrorMsg(c, "订单不存在")
 		return
 	}
-	config := getGatewayConfig(topUp.PaymentMethod)
-	if !config.IsZPay {
+	if topUp.PaymentProvider != model.PaymentProviderZPay {
 		common.ApiErrorMsg(c, "该订单不是 Z Pay 订单")
 		return
+	}
+	config := getGatewayConfig(topUp.PaymentMethod)
+	if !config.IsZPay {
+		config = getGatewayConfig("zpay_alipay")
 	}
 	client := getZPayClient(config)
 	if client == nil {
 		common.ApiErrorMsg(c, "当前管理员未配置 Z Pay 支付信息")
 		return
 	}
-	result, err := client.RefundOrder(req.TradeNo, strconv.FormatFloat(topUp.Money, 'f', 2, 64))
+
+	var result *service.ZPayRefundResult
+	err := model.RefundZPayTopUp(req.TradeNo, c.ClientIP(), func(topUp *model.TopUp) error {
+		refundResult, err := client.RefundOrder(topUp.TradeNo, strconv.FormatFloat(topUp.Money, 'f', 2, 64))
+		if err != nil {
+			return err
+		}
+		if !refundResult.Success() {
+			if refundResult != nil && refundResult.Msg != "" {
+				return fmt.Errorf("Z Pay 退款失败：%s", refundResult.Msg)
+			}
+			return fmt.Errorf("Z Pay 退款失败")
+		}
+		result = refundResult
+		return nil
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return

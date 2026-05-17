@@ -24,9 +24,11 @@ import {
   getUserBillingHistory,
   getAllBillingHistory,
   completeOrder,
+  queryZPayOrder,
+  refundZPayOrder,
   isApiSuccess,
 } from '../api'
-import type { TopupRecord } from '../types'
+import type { TopupRecord, ZPayOrderInfo, ZPayRefundResult } from '../types'
 
 // ============================================================================
 // Billing History Hook
@@ -50,6 +52,8 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [keyword, setKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [querying, setQuerying] = useState(false)
+  const [refunding, setRefunding] = useState(false)
 
   /**
    * Fetch billing history
@@ -117,6 +121,68 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   )
 
   /**
+   * Query a Z Pay order from provider (admin only)
+   */
+  const handleQueryZPayOrder = useCallback(
+    async (tradeNo: string): Promise<ZPayOrderInfo | null> => {
+      if (!isAdmin) {
+        toast.error(i18next.t('Admin access required'))
+        return null
+      }
+
+      setQuerying(true)
+      try {
+        const response = await queryZPayOrder({ trade_no: tradeNo })
+        if (isApiSuccess(response) && response.data) {
+          return response.data
+        }
+        toast.error(response.message || i18next.t('Failed to query Z Pay order'))
+        return null
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to query Z Pay order:', error)
+        toast.error(i18next.t('Failed to query Z Pay order'))
+        return null
+      } finally {
+        setQuerying(false)
+      }
+    },
+    [isAdmin]
+  )
+
+  /**
+   * Refund a Z Pay order and roll back local quota (admin only)
+   */
+  const handleRefundZPayOrder = useCallback(
+    async (tradeNo: string): Promise<ZPayRefundResult | null> => {
+      if (!isAdmin) {
+        toast.error(i18next.t('Admin access required'))
+        return null
+      }
+
+      setRefunding(true)
+      try {
+        const response = await refundZPayOrder({ trade_no: tradeNo })
+        if (isApiSuccess(response)) {
+          toast.success(i18next.t('Z Pay order refunded successfully'))
+          await fetchBillingHistory()
+          return response.data || null
+        }
+        toast.error(response.message || i18next.t('Failed to refund Z Pay order'))
+        return null
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to refund Z Pay order:', error)
+        toast.error(i18next.t('Failed to refund Z Pay order'))
+        return null
+      } finally {
+        setRefunding(false)
+      }
+    },
+    [isAdmin, fetchBillingHistory]
+  )
+
+  /**
    * Change page
    */
   const handlePageChange = useCallback((newPage: number) => {
@@ -152,11 +218,15 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     keyword,
     loading,
     completing,
+    querying,
+    refunding,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
+    handleQueryZPayOrder,
+    handleRefundZPayOrder,
     refresh: fetchBillingHistory,
   }
 }

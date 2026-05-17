@@ -66,6 +66,22 @@ func insertTopUpForPaymentGuardTest(t *testing.T, tradeNo string, userID int, pa
 	require.NoError(t, topUp.Insert())
 }
 
+func insertSuccessfulTopUpForRefundTest(t *testing.T, tradeNo string, userID int, paymentProvider string, amount int64) {
+	t.Helper()
+	topUp := &TopUp{
+		UserId:          userID,
+		Amount:          amount,
+		Money:           9.99,
+		TradeNo:         tradeNo,
+		PaymentMethod:   "zpay_alipay",
+		PaymentProvider: paymentProvider,
+		Status:          common.TopUpStatusSuccess,
+		CreateTime:      time.Now().Unix(),
+		CompleteTime:    time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+}
+
 func getTopUpStatusForPaymentGuardTest(t *testing.T, tradeNo string) string {
 	t.Helper()
 	topUp := GetTopUpByTradeNo(tradeNo)
@@ -137,6 +153,99 @@ func TestUpdatePendingTopUpStatus_RejectsMismatchedPaymentProvider(t *testing.T)
 			assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, tc.tradeNo))
 		})
 	}
+}
+
+func TestRefundZPayTopUp_RejectsPendingOrder(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 501, 2000000)
+	insertTopUpForPaymentGuardTest(t, "zpay-pending-refund", 501, PaymentProviderZPay)
+
+	called := false
+	err := RefundZPayTopUp("zpay-pending-refund", "127.0.0.1", func(topUp *TopUp) error {
+		called = true
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "zpay-pending-refund"))
+	assert.Equal(t, 2000000, getUserQuotaForPaymentGuardTest(t, 501))
+}
+
+func TestRefundZPayTopUp_SuccessDeductsQuotaAndMarksRefunded(t *testing.T) {
+	truncateTables(t)
+
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+
+	insertUserForPaymentGuardTest(t, 502, 2000000)
+	insertSuccessfulTopUpForRefundTest(t, "zpay-success-refund", 502, PaymentProviderZPay, 2)
+
+	err := RefundZPayTopUp("zpay-success-refund", "127.0.0.1", func(topUp *TopUp) error {
+		require.Equal(t, "zpay-success-refund", topUp.TradeNo)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, common.TopUpStatusRefunded, getTopUpStatusForPaymentGuardTest(t, "zpay-success-refund"))
+	assert.Equal(t, 1000000, getUserQuotaForPaymentGuardTest(t, 502))
+}
+
+func TestRefundZPayTopUp_RejectsDuplicateRefund(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 503, 2000000)
+	topUp := &TopUp{
+		UserId:          503,
+		Amount:          2,
+		Money:           9.99,
+		TradeNo:         "zpay-duplicate-refund",
+		PaymentMethod:   "zpay_alipay",
+		PaymentProvider: PaymentProviderZPay,
+		Status:          common.TopUpStatusRefunded,
+		CreateTime:      time.Now().Unix(),
+		CompleteTime:    time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	called := false
+	err := RefundZPayTopUp("zpay-duplicate-refund", "127.0.0.1", func(topUp *TopUp) error {
+		called = true
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, common.TopUpStatusRefunded, getTopUpStatusForPaymentGuardTest(t, "zpay-duplicate-refund"))
+	assert.Equal(t, 2000000, getUserQuotaForPaymentGuardTest(t, 503))
+}
+
+func TestRefundZPayTopUp_RejectsInsufficientQuota(t *testing.T) {
+	truncateTables(t)
+
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+
+	insertUserForPaymentGuardTest(t, 504, 999999)
+	insertSuccessfulTopUpForRefundTest(t, "zpay-insufficient-refund", 504, PaymentProviderZPay, 2)
+
+	called := false
+	err := RefundZPayTopUp("zpay-insufficient-refund", "127.0.0.1", func(topUp *TopUp) error {
+		called = true
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "zpay-insufficient-refund"))
+	assert.Equal(t, 999999, getUserQuotaForPaymentGuardTest(t, 504))
 }
 
 func TestCompleteSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T) {
