@@ -56,6 +56,14 @@ const PAYMENT_TEMPLATES = [
     },
   },
   {
+    name: '7-pay Alipay',
+    template: {
+      color: '#1677FF',
+      name: '7-pay 支付宝',
+      type: 'alipay',
+    },
+  },
+  {
     name: 'WeChat Pay',
     template: {
       color: 'rgba(var(--semi-green-5), 1)',
