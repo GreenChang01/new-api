@@ -3,6 +3,8 @@ package service
 import (
 	"crypto/md5"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -41,6 +43,27 @@ type ZPayVerifyInfo struct {
 	Sign           string
 	SignType       string
 	VerifyStatus   bool
+}
+
+type ZPayOrderInfo struct {
+	Code          int    `json:"code"`
+	Msg           string `json:"msg"`
+	TradeNo       string `json:"trade_no"`
+	ServiceTradeNo string `json:"out_trade_no"`
+	Type          string `json:"type"`
+	MerchantID    string `json:"pid"`
+	AddTime       string `json:"addtime"`
+	EndTime       string `json:"endtime"`
+	Name          string `json:"name"`
+	Money         string `json:"money"`
+	Status        int    `json:"status"`
+	Param         string `json:"param"`
+	Buyer         string `json:"buyer"`
+}
+
+type ZPayRefundResult struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
 }
 
 func NewZPayClient(endpoint string, merchantID string, key string) *ZPayClient {
@@ -150,4 +173,68 @@ func ZPayQueryString(params map[string]string) string {
 
 func ZPayJSON(data any) string {
 	return common.GetJsonString(data)
+}
+
+func (c *ZPayClient) QueryOrderByTradeNo(outTradeNo string) (*ZPayOrderInfo, error) {
+	if c == nil {
+		return nil, fmt.Errorf("zpay client is nil")
+	}
+	queryURL := fmt.Sprintf("%s/api.php?act=order&pid=%s&key=%s&out_trade_no=%s",
+		c.Endpoint,
+		url.QueryEscape(c.MerchantID),
+		url.QueryEscape(c.Key),
+		url.QueryEscape(outTradeNo),
+	)
+	client := GetHttpClient()
+	if client == nil {
+		return nil, fmt.Errorf("http client is nil")
+	}
+	req, err := http.NewRequest(http.MethodGet, queryURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	result := &ZPayOrderInfo{}
+	if err := common.Unmarshal(body, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *ZPayClient) RefundOrder(outTradeNo string, money string) (*ZPayRefundResult, error) {
+	if c == nil {
+		return nil, fmt.Errorf("zpay client is nil")
+	}
+	values := url.Values{}
+	values.Set("act", "refund")
+	values.Set("pid", c.MerchantID)
+	values.Set("key", c.Key)
+	values.Set("out_trade_no", outTradeNo)
+	values.Set("money", money)
+	client := GetHttpClient()
+	if client == nil {
+		return nil, fmt.Errorf("http client is nil")
+	}
+	resp, err := client.Post(c.Endpoint+"/api.php", "application/x-www-form-urlencoded", strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	result := &ZPayRefundResult{}
+	if err := common.Unmarshal(body, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

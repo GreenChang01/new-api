@@ -99,7 +99,7 @@ func GetTopUpInfo(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"enable_online_topup":              isEpayTopUpEnabled(),
+		"enable_online_topup":              isEpayTopUpEnabled() || isZPayTopUpEnabled(),
 		"enable_zpay_topup":                isZPayTopUpEnabled(),
 		"enable_stripe_topup":              isStripeTopUpEnabled(),
 		"enable_creem_topup":               isCreemTopUpEnabled(),
@@ -116,7 +116,12 @@ func GetTopUpInfo(c *gin.Context) {
 		}(),
 		"creem_products":          setting.CreemProducts,
 		"pay_methods":             payMethods,
-		"min_topup":               operation_setting.MinTopUp,
+		"min_topup": func() int {
+			if isEpayTopUpEnabled() {
+				return operation_setting.MinTopUp
+			}
+			return operation_setting.ZPayMinTopUp
+		}(),
 		"stripe_min_topup":        setting.StripeMinTopUp,
 		"waffo_min_topup":         setting.WaffoMinTopUp,
 		"waffo_pancake_min_topup": setting.WaffoPancakeMinTopUp,
@@ -640,6 +645,14 @@ type AdminCompleteTopupRequest struct {
 	TradeNo string `json:"trade_no"`
 }
 
+type AdminZPayOrderRequest struct {
+	TradeNo string `json:"trade_no"`
+}
+
+type AdminZPayRefundRequest struct {
+	TradeNo string `json:"trade_no"`
+}
+
 // AdminCompleteTopUp 管理员补单接口
 func AdminCompleteTopUp(c *gin.Context) {
 	var req AdminCompleteTopupRequest
@@ -657,4 +670,62 @@ func AdminCompleteTopUp(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+func AdminQueryZPayOrder(c *gin.Context) {
+	var req AdminZPayOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.TradeNo == "" {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	topUp := model.GetTopUpByTradeNo(req.TradeNo)
+	if topUp == nil {
+		common.ApiErrorMsg(c, "订单不存在")
+		return
+	}
+	config := getGatewayConfig(topUp.PaymentMethod)
+	if !config.IsZPay {
+		common.ApiErrorMsg(c, "该订单不是 Z Pay 订单")
+		return
+	}
+	client := getZPayClient(config)
+	if client == nil {
+		common.ApiErrorMsg(c, "当前管理员未配置 Z Pay 支付信息")
+		return
+	}
+	orderInfo, err := client.QueryOrderByTradeNo(req.TradeNo)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, orderInfo)
+}
+
+func AdminRefundZPayOrder(c *gin.Context) {
+	var req AdminZPayRefundRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.TradeNo == "" {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	topUp := model.GetTopUpByTradeNo(req.TradeNo)
+	if topUp == nil {
+		common.ApiErrorMsg(c, "订单不存在")
+		return
+	}
+	config := getGatewayConfig(topUp.PaymentMethod)
+	if !config.IsZPay {
+		common.ApiErrorMsg(c, "该订单不是 Z Pay 订单")
+		return
+	}
+	client := getZPayClient(config)
+	if client == nil {
+		common.ApiErrorMsg(c, "当前管理员未配置 Z Pay 支付信息")
+		return
+	}
+	result, err := client.RefundOrder(req.TradeNo, strconv.FormatFloat(topUp.Money, 'f', 2, 64))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
 }
