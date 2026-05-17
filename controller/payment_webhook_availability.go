@@ -117,3 +117,20 @@ func isEpayWebhookConfigured() bool {
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
 }
+
+func isZPayTopUpEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	return isZPayWebhookConfigured() && len(operation_setting.ZPayMethods) > 0
+}
+
+func isZPayWebhookConfigured() bool {
+	return strings.TrimSpace(operation_setting.ZPayAddress) != "" &&
+		strings.TrimSpace(operation_setting.ZPayId) != "" &&
+		strings.TrimSpace(operation_setting.ZPayKey) != ""
+}
+
+func isZPayWebhookEnabled() bool {
+	return isZPayTopUpEnabled()
+}

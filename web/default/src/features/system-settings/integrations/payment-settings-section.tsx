@@ -78,6 +78,24 @@ const paymentSchema = z.object({
   EpayKey: z.string(),
   Price: z.coerce.number().min(0),
   MinTopUp: z.coerce.number().min(0),
+  ZPayAddress: z.string().refine((value) => {
+    const trimmed = value.trim()
+    if (!trimmed) return true
+    return /^https?:\/\//.test(trimmed)
+  }, 'Provide a valid callback URL starting with http:// or https://'),
+  ZPayId: z.string(),
+  ZPayKey: z.string(),
+  ZPayPrice: z.coerce.number().min(0),
+  ZPayMinTopUp: z.coerce.number().min(0),
+  ZPayMethods: z.string().superRefine((value, ctx) => {
+    const error = getJsonError(value)
+    if (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error,
+      })
+    }
+  }),
   CustomCallbackAddress: z.string().refine((value) => {
     const trimmed = value.trim()
     if (!trimmed) return true
@@ -256,6 +274,7 @@ export function PaymentSettingsSection({
     defaultValues: {
       ...defaultValues,
       PayMethods: formatJsonForEditor(defaultValues.PayMethods),
+      ZPayMethods: formatJsonForEditor(defaultValues.ZPayMethods),
       AmountOptions: formatJsonForEditor(defaultValues.AmountOptions),
       AmountDiscount: formatJsonForEditor(defaultValues.AmountDiscount),
       CreemProducts: formatJsonForEditor(defaultValues.CreemProducts),
@@ -268,6 +287,7 @@ export function PaymentSettingsSection({
     form.reset({
       ...parsedDefaults,
       PayMethods: formatJsonForEditor(parsedDefaults.PayMethods),
+      ZPayMethods: formatJsonForEditor(parsedDefaults.ZPayMethods),
       AmountOptions: formatJsonForEditor(parsedDefaults.AmountOptions),
       AmountDiscount: formatJsonForEditor(parsedDefaults.AmountDiscount),
       CreemProducts: formatJsonForEditor(parsedDefaults.CreemProducts),
@@ -280,6 +300,9 @@ export function PaymentSettingsSection({
       Price: values.Price as number,
       MinTopUp: values.MinTopUp as number,
       PayMethods: values.PayMethods.trim(),
+      ZPayPrice: values.ZPayPrice as number,
+      ZPayMinTopUp: values.ZPayMinTopUp as number,
+      ZPayMethods: values.ZPayMethods.trim(),
       AmountOptions: values.AmountOptions.trim(),
       AmountDiscount: values.AmountDiscount.trim(),
     }
@@ -288,6 +311,9 @@ export function PaymentSettingsSection({
       Price: initialRef.current.Price,
       MinTopUp: initialRef.current.MinTopUp,
       PayMethods: initialRef.current.PayMethods.trim(),
+      ZPayPrice: initialRef.current.ZPayPrice,
+      ZPayMinTopUp: initialRef.current.ZPayMinTopUp,
+      ZPayMethods: initialRef.current.ZPayMethods.trim(),
       AmountOptions: initialRef.current.AmountOptions.trim(),
       AmountDiscount: initialRef.current.AmountDiscount.trim(),
     }
@@ -307,6 +333,21 @@ export function PaymentSettingsSection({
       normalizeJsonForComparison(initial.PayMethods)
     ) {
       updates.push({ key: 'PayMethods', value: sanitized.PayMethods })
+    }
+
+    if (sanitized.ZPayPrice !== initial.ZPayPrice) {
+      updates.push({ key: 'ZPayPrice', value: sanitized.ZPayPrice })
+    }
+
+    if (sanitized.ZPayMinTopUp !== initial.ZPayMinTopUp) {
+      updates.push({ key: 'ZPayMinTopUp', value: sanitized.ZPayMinTopUp })
+    }
+
+    if (
+      normalizeJsonForComparison(sanitized.ZPayMethods) !==
+      normalizeJsonForComparison(initial.ZPayMethods)
+    ) {
+      updates.push({ key: 'ZPayMethods', value: sanitized.ZPayMethods })
     }
 
     if (
@@ -375,6 +416,43 @@ export function PaymentSettingsSection({
         key: 'CustomCallbackAddress',
         value: sanitized.CustomCallbackAddress,
       })
+    }
+
+    if (updates.length === 0) {
+      return
+    }
+
+    for (const update of updates) {
+      await updateOption.mutateAsync(update)
+    }
+  }
+
+  const saveZPaySettings = async () => {
+    const values = form.getValues()
+    const sanitized = {
+      ZPayAddress: removeTrailingSlash(values.ZPayAddress),
+      ZPayId: values.ZPayId.trim(),
+      ZPayKey: values.ZPayKey.trim(),
+    }
+
+    const initial = {
+      ZPayAddress: removeTrailingSlash(initialRef.current.ZPayAddress),
+      ZPayId: initialRef.current.ZPayId.trim(),
+      ZPayKey: initialRef.current.ZPayKey.trim(),
+    }
+
+    const updates: Array<{ key: string; value: string }> = []
+
+    if (sanitized.ZPayAddress !== initial.ZPayAddress) {
+      updates.push({ key: 'ZPayAddress', value: sanitized.ZPayAddress })
+    }
+
+    if (sanitized.ZPayId !== initial.ZPayId) {
+      updates.push({ key: 'ZPayId', value: sanitized.ZPayId })
+    }
+
+    if (sanitized.ZPayKey && sanitized.ZPayKey !== initial.ZPayKey) {
+      updates.push({ key: 'ZPayKey', value: sanitized.ZPayKey })
     }
 
     if (updates.length === 0) {
@@ -801,7 +879,7 @@ export function PaymentSettingsSection({
               render={({ field }) => (
                 <FormItem>
                   <div className='mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                    <FormLabel>{t('Payment methods')}</FormLabel>
+                      <FormLabel>{t('Epay payment methods')}</FormLabel>
                     <Button
                       type='button'
                       variant='outline'
@@ -842,9 +920,40 @@ export function PaymentSettingsSection({
                     )}
                   </FormControl>
                   <FormDescription>
-                    {t(
-                      'Configure available payment methods. Provide a JSON array.'
+                    {t('Configure available Epay payment methods. Provide a JSON array.')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='ZPayMethods'
+              render={({ field }) => (
+                <FormItem>
+                  <div className='mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                    <FormLabel>{t('Z Pay payment methods')}</FormLabel>
+                  </div>
+                  <FormControl>
+                    {payMethodsVisualMode ? (
+                      <PaymentMethodsVisualEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                      />
+                    ) : (
+                      <Textarea
+                        rows={4}
+                        placeholder={t(
+                          '[{"name":"Z Pay 支付宝","type":"zpay_alipay","color":"#1677FF"}]'
+                        )}
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
                     )}
+                  </FormControl>
+                  <FormDescription>
+                    {t('Configure available Z Pay payment methods. Provide a JSON array.')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -992,7 +1101,7 @@ export function PaymentSettingsSection({
                 name='PayAddress'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Epay endpoint')}</FormLabel>
+                    <FormLabel>{t('Gateway endpoint')}</FormLabel>
                     <FormControl>
                       <Input
                         placeholder={t('https://pay.example.com')}
@@ -1038,7 +1147,7 @@ export function PaymentSettingsSection({
                 name='EpayId'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Epay merchant ID')}</FormLabel>
+                    <FormLabel>{t('Merchant ID')}</FormLabel>
                     <FormControl>
                       <Input
                         placeholder='10001'
@@ -1057,7 +1166,7 @@ export function PaymentSettingsSection({
                 name='EpayKey'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Epay secret key')}</FormLabel>
+                    <FormLabel>{t('Gateway secret key')}</FormLabel>
                     <FormControl>
                       <Input
                         type='password'
@@ -1087,7 +1196,141 @@ export function PaymentSettingsSection({
             >
               {updateOption.isPending
                 ? t('Saving...')
-                : t('Save Epay settings')}
+                : t('Save gateway settings')}
+            </Button>
+          </div>
+
+          <Separator />
+
+          <div className='space-y-4'>
+            <div>
+              <h3 className='text-lg font-medium'>{t('Z Pay Gateway')}</h3>
+              <p className='text-muted-foreground text-sm'>
+                {t('Configuration for Z Pay payment integration')}
+              </p>
+            </div>
+
+            <div className='grid gap-6 md:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='ZPayPrice'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Z Pay price (local currency / USD)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        step='0.01'
+                        min={0}
+                        value={(field.value ?? 0) as number}
+                        onChange={(event) =>
+                          field.onChange(event.target.valueAsNumber)
+                        }
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='ZPayMinTopUp'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Z Pay minimum top-up (USD)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        step='0.01'
+                        min={0}
+                        value={(field.value ?? 0) as number}
+                        onChange={(event) =>
+                          field.onChange(event.target.valueAsNumber)
+                        }
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <div className='grid gap-6 md:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='ZPayAddress'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Z Pay endpoint')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t('https://zpayz.cn')}
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Base address provided by your Z Pay gateway')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='ZPayId'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Z Pay merchant ID')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='10001'
+                        autoComplete='off'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name='ZPayKey'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Z Pay secret key')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='password'
+                      placeholder={t('Enter new key to update')}
+                      autoComplete='new-password'
+                      {...field}
+                      onChange={(event) => field.onChange(event.target.value)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Leave blank unless rotating the secret')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <Button
+              type='button'
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                saveZPaySettings()
+              }}
+              disabled={updateOption.isPending}
+            >
+              {updateOption.isPending ? t('Saving...') : t('Save Z Pay settings')}
             </Button>
           </div>
 

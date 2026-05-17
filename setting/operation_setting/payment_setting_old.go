@@ -15,6 +15,11 @@ var EpayId = ""
 var EpayKey = ""
 var Price = 7.3
 var MinTopUp = 1
+var ZPayAddress = ""
+var ZPayId = ""
+var ZPayKey = ""
+var ZPayPrice = 7.3
+var ZPayMinTopUp = 1
 var USDExchangeRate = 7.3
 
 var PayMethods = []map[string]string{
@@ -36,6 +41,14 @@ var PayMethods = []map[string]string{
 	},
 }
 
+var ZPayMethods = []map[string]string{
+	{
+		"name":  "Z Pay 支付宝",
+		"color": "#1677FF",
+		"type":  "zpay_alipay",
+	},
+}
+
 func UpdatePayMethodsByJsonString(jsonString string) error {
 	PayMethods = make([]map[string]string, 0)
 	return common.Unmarshal([]byte(jsonString), &PayMethods)
@@ -49,8 +62,30 @@ func PayMethods2JsonString() string {
 	return string(jsonBytes)
 }
 
+func UpdateZPayMethodsByJsonString(jsonString string) error {
+	ZPayMethods = make([]map[string]string, 0)
+	return common.Unmarshal([]byte(jsonString), &ZPayMethods)
+}
+
+func ZPayMethods2JsonString() string {
+	jsonBytes, err := common.Marshal(ZPayMethods)
+	if err != nil {
+		return "[]"
+	}
+	return string(jsonBytes)
+}
+
 func ContainsPayMethod(method string) bool {
 	for _, payMethod := range PayMethods {
+		if payMethod["type"] == method {
+			return true
+		}
+	}
+	return false
+}
+
+func ContainsZPayMethod(method string) bool {
+	for _, payMethod := range ZPayMethods {
 		if payMethod["type"] == method {
 			return true
 		}

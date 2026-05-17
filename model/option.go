@@ -80,6 +80,12 @@ func InitOptionMap() {
 	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
+	common.OptionMap["ZPayAddress"] = ""
+	common.OptionMap["ZPayId"] = ""
+	common.OptionMap["ZPayKey"] = ""
+	common.OptionMap["ZPayPrice"] = strconv.FormatFloat(operation_setting.ZPayPrice, 'f', -1, 64)
+	common.OptionMap["ZPayMinTopUp"] = strconv.Itoa(operation_setting.ZPayMinTopUp)
+	common.OptionMap["ZPayMethods"] = operation_setting.ZPayMethods2JsonString()
 	common.OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.StripeMinTopUp)
 	common.OptionMap["StripeApiSecret"] = setting.StripeApiSecret
 	common.OptionMap["StripeWebhookSecret"] = setting.StripeWebhookSecret
@@ -353,6 +359,8 @@ func updateOptionMap(key string, value string) (err error) {
 		system_setting.WorkerValidKey = value
 	case "PayAddress":
 		operation_setting.PayAddress = value
+	case "ZPayAddress":
+		operation_setting.ZPayAddress = value
 	case "Chats":
 		err = setting.UpdateChatsByJsonString(value)
 	case "AutoGroups":
@@ -361,14 +369,22 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.CustomCallbackAddress = value
 	case "EpayId":
 		operation_setting.EpayId = value
+	case "ZPayId":
+		operation_setting.ZPayId = value
 	case "EpayKey":
 		operation_setting.EpayKey = value
+	case "ZPayKey":
+		operation_setting.ZPayKey = value
 	case "Price":
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
+	case "ZPayPrice":
+		operation_setting.ZPayPrice, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":
 		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
+	case "ZPayMinTopUp":
+		operation_setting.ZPayMinTopUp, _ = strconv.Atoi(value)
 	case "StripeApiSecret":
 		setting.StripeApiSecret = value
 	case "StripeWebhookSecret":
@@ -543,6 +559,8 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
 	case "PayMethods":
 		err = operation_setting.UpdatePayMethodsByJsonString(value)
+	case "ZPayMethods":
+		err = operation_setting.UpdateZPayMethodsByJsonString(value)
 	case "WaffoPayMethods":
 		// WaffoPayMethods is read directly from OptionMap via setting.GetWaffoPayMethods().
 		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).

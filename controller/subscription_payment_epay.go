@@ -11,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -45,7 +44,8 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiErrorMsg(c, "套餐金额过低")
 		return
 	}
-	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
+	config := getGatewayConfig(req.PaymentMethod)
+	if !containsGatewayMethod(config, req.PaymentMethod) {
 		common.ApiErrorMsg(c, "支付方式不存在")
 		return
 	}
@@ -76,9 +76,9 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	}
 
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
-	tradeNo = fmt.Sprintf("SUBUSR%dNO%s", userId, tradeNo)
+	tradeNo = fmt.Sprintf("%s%dNO%s", config.SubscriptionTag, userId, tradeNo)
 
-	client := GetEpayClient()
+	client := getGatewayClient(config)
 	if client == nil {
 		common.ApiErrorMsg(c, "当前管理员未配置支付信息")
 		return
@@ -90,7 +90,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		Money:           plan.PriceAmount,
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,
-		PaymentProvider: model.PaymentProviderEpay,
+		PaymentProvider: config.Provider,
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
@@ -99,7 +99,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		return
 	}
 	uri, params, err := client.Purchase(&epay.PurchaseArgs{
-		Type:           req.PaymentMethod,
+		Type:           normalizeGatewayMethod(req.PaymentMethod),
 		ServiceTradeNo: tradeNo,
 		Name:           fmt.Sprintf("SUB:%s", plan.Title),
 		Money:          strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
@@ -108,7 +108,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		ReturnUrl:      returnUrl,
 	})
 	if err != nil {
-		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderEpay)
+		_ = model.ExpireSubscriptionOrder(tradeNo, config.Provider)
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
@@ -141,7 +141,14 @@ func SubscriptionEpayNotify(c *gin.Context) {
 		return
 	}
 
-	client := GetEpayClient()
+	tradeNo := params["out_trade_no"]
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	if order == nil {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	config := getGatewayConfig(order.PaymentMethod)
+	client := getGatewayClient(config)
 	if client == nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
@@ -160,7 +167,7 @@ func SubscriptionEpayNotify(c *gin.Context) {
 	LockOrder(verifyInfo.ServiceTradeNo)
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
 
-	if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type); err != nil {
+	if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), config.Provider, verifyInfo.Type); err != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -196,7 +203,14 @@ func SubscriptionEpayReturn(c *gin.Context) {
 		return
 	}
 
-	client := GetEpayClient()
+	tradeNo := params["out_trade_no"]
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	if order == nil {
+		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
+		return
+	}
+	config := getGatewayConfig(order.PaymentMethod)
+	client := getGatewayClient(config)
 	if client == nil {
 		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 		return
@@ -209,7 +223,7 @@ func SubscriptionEpayReturn(c *gin.Context) {
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
 		LockOrder(verifyInfo.ServiceTradeNo)
 		defer UnlockOrder(verifyInfo.ServiceTradeNo)
-		if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type); err != nil {
+		if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), config.Provider, verifyInfo.Type); err != nil {
 			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 			return
 		}

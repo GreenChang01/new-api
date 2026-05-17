@@ -222,6 +222,12 @@ export type BillingSettings = {
   EpayKey: string
   Price: number
   MinTopUp: number
+  ZPayAddress: string
+  ZPayId: string
+  ZPayKey: string
+  ZPayPrice: number
+  ZPayMinTopUp: number
+  ZPayMethods: string
   CustomCallbackAddress: string
   PayMethods: string
   'payment_setting.amount_options': string

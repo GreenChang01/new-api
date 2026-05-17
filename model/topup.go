@@ -33,6 +33,7 @@ const (
 
 const (
 	PaymentProviderEpay         = "epay"
+	PaymentProviderZPay         = "zpay"
 	PaymentProviderStripe       = "stripe"
 	PaymentProviderCreem        = "creem"
 	PaymentProviderWaffo        = "waffo"

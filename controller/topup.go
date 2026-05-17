@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +26,10 @@ func GetTopUpInfo(c *gin.Context) {
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 
 	// 获取支付方式
-	payMethods := operation_setting.PayMethods
+	payMethods := append([]map[string]string{}, operation_setting.PayMethods...)
+	if isZPayTopUpEnabled() {
+		payMethods = append(payMethods, operation_setting.ZPayMethods...)
+	}
 	if !complianceConfirmed {
 		payMethods = []map[string]string{}
 	}
@@ -96,6 +100,7 @@ func GetTopUpInfo(c *gin.Context) {
 
 	data := gin.H{
 		"enable_online_topup":              isEpayTopUpEnabled(),
+		"enable_zpay_topup":                isZPayTopUpEnabled(),
 		"enable_stripe_topup":              isStripeTopUpEnabled(),
 		"enable_creem_topup":               isCreemTopUpEnabled(),
 		"enable_waffo_topup":               enableWaffo,
@@ -128,24 +133,68 @@ type EpayRequest struct {
 }
 
 type AmountRequest struct {
-	Amount int64 `json:"amount"`
+	Amount        int64  `json:"amount"`
+	PaymentMethod string `json:"payment_method"`
+}
+
+type epayGatewayConfig struct {
+	Address         string
+	PartnerID       string
+	Key             string
+	Price           float64
+	MinTopUp        int
+	Methods         []map[string]string
+	Provider        string
+	NotifyPath      string
+	SubscriptionTag string
+}
+
+func getGatewayConfig(paymentMethod string) *epayGatewayConfig {
+	if strings.HasPrefix(paymentMethod, "zpay_") {
+		return &epayGatewayConfig{
+			Address:         operation_setting.ZPayAddress,
+			PartnerID:       operation_setting.ZPayId,
+			Key:             operation_setting.ZPayKey,
+			Price:           operation_setting.ZPayPrice,
+			MinTopUp:        operation_setting.ZPayMinTopUp,
+			Methods:         operation_setting.ZPayMethods,
+			Provider:        model.PaymentProviderZPay,
+			NotifyPath:      "/api/user/epay/notify",
+			SubscriptionTag: "ZPAYSUB",
+		}
+	}
+	return &epayGatewayConfig{
+		Address:         operation_setting.PayAddress,
+		PartnerID:       operation_setting.EpayId,
+		Key:             operation_setting.EpayKey,
+		Price:           operation_setting.Price,
+		MinTopUp:        operation_setting.MinTopUp,
+		Methods:         operation_setting.PayMethods,
+		Provider:        model.PaymentProviderEpay,
+		NotifyPath:      "/api/user/epay/notify",
+		SubscriptionTag: "SUBUSR",
+	}
 }
 
 func GetEpayClient() *epay.Client {
-	if operation_setting.PayAddress == "" || operation_setting.EpayId == "" || operation_setting.EpayKey == "" {
+	return getGatewayClient(getGatewayConfig(""))
+}
+
+func getGatewayClient(config *epayGatewayConfig) *epay.Client {
+	if config == nil || config.Address == "" || config.PartnerID == "" || config.Key == "" {
 		return nil
 	}
 	withUrl, err := epay.NewClient(&epay.Config{
-		PartnerID: operation_setting.EpayId,
-		Key:       operation_setting.EpayKey,
-	}, operation_setting.PayAddress)
+		PartnerID: config.PartnerID,
+		Key:       config.Key,
+	}, config.Address)
 	if err != nil {
 		return nil
 	}
 	return withUrl
 }
 
-func getPayMoney(amount int64, group string) float64 {
+func getGatewayPayMoney(amount int64, group string, price float64) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	// 充值金额以“展示类型”为准：
 	// - USD/CNY: 前端传 amount 为金额单位；TOKENS: 前端传 tokens，需要换成 USD 金额
@@ -160,7 +209,7 @@ func getPayMoney(amount int64, group string) float64 {
 	}
 
 	dTopupGroupRatio := decimal.NewFromFloat(topupGroupRatio)
-	dPrice := decimal.NewFromFloat(operation_setting.Price)
+	dPrice := decimal.NewFromFloat(price)
 	// apply optional preset discount by the original request amount (if configured), default 1.0
 	discount := 1.0
 	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok {
@@ -175,14 +224,44 @@ func getPayMoney(amount int64, group string) float64 {
 	return payMoney.InexactFloat64()
 }
 
-func getMinTopup() int64 {
-	minTopup := operation_setting.MinTopUp
+func getPayMoney(amount int64, group string) float64 {
+	return getGatewayPayMoney(amount, group, operation_setting.Price)
+}
+
+func getGatewayMinTopup(minTopup int) int64 {
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dMinTopup := decimal.NewFromInt(int64(minTopup))
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 		minTopup = int(dMinTopup.Mul(dQuotaPerUnit).IntPart())
 	}
 	return int64(minTopup)
+}
+
+func getMinTopup() int64 {
+	return getGatewayMinTopup(operation_setting.MinTopUp)
+}
+
+func normalizeGatewayMethod(paymentMethod string) string {
+	switch paymentMethod {
+	case "zpay_alipay", "epay_alipay":
+		return "alipay"
+	case "zpay_wxpay", "epay_wxpay":
+		return "wxpay"
+	default:
+		return paymentMethod
+	}
+}
+
+func containsGatewayMethod(config *epayGatewayConfig, method string) bool {
+	if config == nil {
+		return false
+	}
+	for _, payMethod := range config.Methods {
+		if payMethod["type"] == method {
+			return true
+		}
+	}
+	return false
 }
 
 func RequestEpay(c *gin.Context) {
@@ -192,8 +271,10 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
-	if req.Amount < getMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+	config := getGatewayConfig(req.PaymentMethod)
+	minTopup := getGatewayMinTopup(config.MinTopUp)
+	if req.Amount < minTopup {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", minTopup)})
 		return
 	}
 
@@ -203,29 +284,29 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
+	payMoney := getGatewayPayMoney(req.Amount, group, config.Price)
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
 
-	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
+	if !containsGatewayMethod(config, req.PaymentMethod) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式不存在"})
 		return
 	}
 
 	callBackAddress := service.GetCallbackAddress()
 	returnUrl, _ := url.Parse(paymentReturnPath("/console/log"))
-	notifyUrl, _ := url.Parse(callBackAddress + "/api/user/epay/notify")
+	notifyUrl, _ := url.Parse(callBackAddress + config.NotifyPath)
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("USR%dNO%s", id, tradeNo)
-	client := GetEpayClient()
+	client := getGatewayClient(config)
 	if client == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "当前管理员未配置支付信息"})
 		return
 	}
 	uri, params, err := client.Purchase(&epay.PurchaseArgs{
-		Type:           req.PaymentMethod,
+		Type:           normalizeGatewayMethod(req.PaymentMethod),
 		ServiceTradeNo: tradeNo,
 		Name:           fmt.Sprintf("TUC%d", req.Amount),
 		Money:          strconv.FormatFloat(payMoney, 'f', 2, 64),
@@ -250,17 +331,17 @@ func RequestEpay(c *gin.Context) {
 		Money:           payMoney,
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,
-		PaymentProvider: model.PaymentProviderEpay,
+		PaymentProvider: config.Provider,
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
 	err = topUp.Insert()
 	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 创建充值订单失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("支付网关 创建充值订单失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 充值订单创建成功 user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, req.Amount, payMoney, uri, common.GetJsonString(params)))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("支付网关 充值订单创建成功 user_id=%d trade_no=%s payment_provider=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, config.Provider, req.PaymentMethod, req.Amount, payMoney, uri, common.GetJsonString(params)))
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri})
 }
 
@@ -418,8 +499,9 @@ func RequestAmount(c *gin.Context) {
 		return
 	}
 
-	if req.Amount < getMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+	config := getGatewayConfig(req.PaymentMethod)
+	if req.Amount < getGatewayMinTopup(config.MinTopUp) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getGatewayMinTopup(config.MinTopUp))})
 		return
 	}
 	id := c.GetInt("id")
@@ -428,7 +510,7 @@ func RequestAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
+	payMoney := getGatewayPayMoney(req.Amount, group, config.Price)
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
